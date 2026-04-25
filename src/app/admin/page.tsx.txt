@@ -1,0 +1,264 @@
+'use client'
+// app/admin/page.tsx
+// Admin panel - only accessible by the admin email
+
+import { useAuth } from '@/hooks/useAuth'
+import { useEffect, useState } from 'react'
+import { collection, getDocs, deleteDoc, doc, onSnapshot } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
+import { formatDistanceToNow } from 'date-fns'
+import toast from 'react-hot-toast'
+import { FiUsers, FiMonitor, FiTrash2, FiRefreshCw, FiShield, FiLogOut } from 'react-icons/fi'
+
+// ⚠️ Only this email can access admin panel
+const ADMIN_EMAIL = 'aamaldev250@gmail.com'
+
+interface DeviceData {
+  id: string
+  name: string
+  isOnline: boolean
+  lastSeen: any
+  isPrimary: boolean
+}
+
+interface UserData {
+  uid: string
+  devices: DeviceData[]
+}
+
+export default function AdminPage() {
+  const { user, loading, logout } = useAuth()
+  const [users, setUsers]         = useState<UserData[]>([])
+  const [fetching, setFetching]   = useState(true)
+  const [totalOnline, setTotalOnline] = useState(0)
+  const [totalDevices, setTotalDevices] = useState(0)
+
+  // Block non-admins
+  const isAdmin = user?.email === ADMIN_EMAIL
+
+  useEffect(() => {
+    if (!isAdmin) return
+
+    const fetchAll = async () => {
+      setFetching(true)
+      try {
+        // Get all users
+        const usersSnap = await getDocs(collection(db, 'users'))
+        const usersData: UserData[] = []
+
+        for (const userDoc of usersSnap.docs) {
+          const devicesSnap = await getDocs(
+            collection(db, 'users', userDoc.id, 'devices')
+          )
+          const devices: DeviceData[] = devicesSnap.docs.map(d => ({
+            id:        d.id,
+            name:      d.data().name ?? 'Unknown',
+            isOnline:  d.data().isOnline ?? false,
+            lastSeen:  d.data().lastSeen,
+            isPrimary: d.data().isPrimary ?? false,
+          }))
+          usersData.push({ uid: userDoc.id, devices })
+        }
+
+        setUsers(usersData)
+        const allDevices = usersData.flatMap(u => u.devices)
+        setTotalDevices(allDevices.length)
+        setTotalOnline(allDevices.filter(d => d.isOnline).length)
+      } catch (e) {
+        toast.error('Failed to fetch data')
+      } finally {
+        setFetching(false)
+      }
+    }
+
+    fetchAll()
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchAll, 30000)
+    return () => clearInterval(interval)
+  }, [isAdmin])
+
+  const deleteDevice = async (uid: string, deviceId: string) => {
+    try {
+      await deleteDoc(doc(db, 'users', uid, 'devices', deviceId))
+      toast.success('Device deleted!')
+      setUsers(prev => prev.map(u =>
+        u.uid === uid
+          ? { ...u, devices: u.devices.filter(d => d.id !== deviceId) }
+          : u
+      ))
+    } catch {
+      toast.error('Failed to delete')
+    }
+  }
+
+  if (loading) return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-500">
+      <FiRefreshCw className="animate-spin mr-2" /> Loading...
+    </div>
+  )
+
+  if (!user) return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="text-center">
+        <FiShield className="text-6xl text-red-500 mx-auto mb-4" />
+        <h1 className="text-2xl font-bold text-white mb-2">Not Logged In</h1>
+        <p className="text-slate-400">Please login first</p>
+        <a href="/" className="mt-4 inline-block bg-emerald-600 text-white px-6 py-2 rounded-xl">Go to Login</a>
+      </div>
+    </div>
+  )
+
+  if (!isAdmin) return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="text-center">
+        <FiShield className="text-6xl text-red-500 mx-auto mb-4" />
+        <h1 className="text-2xl font-bold text-white mb-2">Access Denied</h1>
+        <p className="text-slate-400">You are not an admin 🚫</p>
+        <a href="/" className="mt-4 inline-block bg-emerald-600 text-white px-6 py-2 rounded-xl">Go Back</a>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-white">
+      {/* Header */}
+      <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-md sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-amber-500 rounded-lg flex items-center justify-center text-black font-bold text-sm">
+              👑
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-white leading-none">Admin Panel</h1>
+              <p className="text-xs text-amber-500 mt-0.5">DeviceWatch Control Center</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <a href="/" className="text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all">
+              Dashboard
+            </a>
+            <button
+              onClick={logout}
+              className="flex items-center gap-1.5 text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all"
+            >
+              <FiLogOut size={14} /> Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-6xl mx-auto px-4 py-8">
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+          {[
+            { label: 'Total Users',   value: users.length,                     color: 'text-blue-400',    icon: '👥' },
+            { label: 'Total Devices', value: totalDevices,                      color: 'text-slate-300',   icon: '📱' },
+            { label: 'Online Now',    value: totalOnline,                       color: 'text-emerald-400', icon: '🟢' },
+            { label: 'Offline',       value: totalDevices - totalOnline,        color: 'text-red-400',     icon: '🔴' },
+          ].map(s => (
+            <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-center animate-fade-in">
+              <div className="text-2xl mb-1">{s.icon}</div>
+              <div className={`text-3xl font-bold ${s.color}`}>{s.value}</div>
+              <div className="text-xs text-slate-500 mt-1">{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Refresh button */}
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-lg font-bold text-white">All Users & Devices</h2>
+          <button
+            onClick={() => window.location.reload()}
+            className="flex items-center gap-2 text-sm text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-all"
+          >
+            <FiRefreshCw size={13} /> Refresh
+          </button>
+        </div>
+
+        {/* Users list */}
+        {fetching ? (
+          <div className="flex items-center justify-center py-24 text-slate-500">
+            <FiRefreshCw className="animate-spin mr-2" /> Loading all users...
+          </div>
+        ) : users.length === 0 ? (
+          <div className="text-center py-24 text-slate-600">
+            <FiUsers className="mx-auto mb-3 text-4xl opacity-30" />
+            <p className="text-sm">No users found</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {users.map((u, i) => (
+              <div key={u.uid} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 animate-slide-up">
+                {/* User header */}
+                <div className="flex items-center gap-3 mb-4 pb-3 border-b border-slate-800">
+                  <div className="w-9 h-9 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center text-sm font-bold">
+                    U{i + 1}
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold text-white">User {i + 1}</div>
+                    <div className="text-xs text-slate-500 font-mono">{u.uid.slice(0, 20)}...</div>
+                  </div>
+                  <div className="ml-auto flex items-center gap-2">
+                    <span className="text-xs text-slate-400">{u.devices.length} devices</span>
+                    <span className="text-xs text-emerald-400">
+                      {u.devices.filter(d => d.isOnline).length} online
+                    </span>
+                  </div>
+                </div>
+
+                {/* Devices */}
+                {u.devices.length === 0 ? (
+                  <p className="text-xs text-slate-600 text-center py-2">No devices</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {u.devices.map(device => (
+                      <div
+                        key={device.id}
+                        className={`rounded-xl border p-3 flex items-center justify-between ${
+                          device.isOnline
+                            ? 'border-emerald-500/20 bg-emerald-950/20'
+                            : 'border-slate-700/50 bg-slate-800/30'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <div className="relative">
+                            <div className={`w-2.5 h-2.5 rounded-full ${device.isOnline ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+                            {device.isOnline && (
+                              <div className="absolute inset-0 w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping opacity-60" />
+                            )}
+                          </div>
+                          <div>
+                            <div className="text-sm font-medium text-white flex items-center gap-1">
+                              {device.name}
+                              {device.isPrimary && <span className="text-amber-400 text-xs">★</span>}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {device.isOnline ? '🟢 Online' : '🔴 Offline'}
+                            </div>
+                            {device.lastSeen?.toDate && (
+                              <div className="text-xs text-slate-600">
+                                {formatDistanceToNow(device.lastSeen.toDate(), { addSuffix: true })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => deleteDevice(u.uid, device.id)}
+                          className="text-slate-600 hover:text-red-400 transition-colors p-1"
+                          title="Delete device"
+                        >
+                          <FiTrash2 size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
